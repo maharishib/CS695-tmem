@@ -1,0 +1,28 @@
+make -C /lib/modules/4.20.0/build/ M=/home/maharishi/glayer modules
+make[1]: Entering directory '/home/maharishi/linux-4.20'
+  CC [M]  /home/maharishi/glayer/glayer.o
+/home/maharishi/glayer/glayer.c:35:20: error: initialization from incompatible pointer type [-Werror=incompatible-pointer-types]
+  .init_shared_fs = glayer_cc_init_shared_fs,
+                    ^~~~~~~~~~~~~~~~~~~~~~~~
+/home/maharishi/glayer/glayer.c:35:20: note: (near initialization for ‘glayer_cc_ops.init_shared_fs’)
+/home/maharishi/glayer/glayer.c:43:8: error: expected ‘{’ before ‘int’
+ struct int glayer_cc_register_ops(void){
+        ^~~
+/home/maharishi/glayer/glayer.c:43:8: error: two or more data types in declaration specifiers
+/home/maharishi/glayer/glayer.c: In function ‘func_init’:
+/home/maharishi/glayer/glayer.c:53:2: error: implicit declaration of function ‘glayer_cc_register_ops’; did you mean ‘glayer_cc_init_fs’? [-Werror=implicit-function-declaration]
+  glayer_cc_register_ops();
+  ^~~~~~~~~~~~~~~~~~~~~~
+  glayer_cc_init_fs
+At top level:
+/home/maharishi/glayer/glayer.c:33:30: warning: ‘glayer_cc_ops’ defined but not used [-Wunused-variable]
+ static struct cleancache_ops glayer_cc_ops ={
+                              ^~~~~~~~~~~~~
+cc1: some warnings being treated as errors
+scripts/Makefile.build:297: recipe for target '/home/maharishi/glayer/glayer.o' failed
+make[2]: *** [/home/maharishi/glayer/glayer.o] Error 1
+Makefile:1563: recipe for target '_module_/home/maharishi/glayer' failed
+make[1]: *** [_module_/home/maharishi/glayer] Error 2
+make[1]: Leaving directory '/home/maharishi/linux-4.20'
+Makefile:3: recipe for target 'all' failed
+make: *** [all] Error 2
