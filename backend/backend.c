@@ -68,7 +68,7 @@ struct zbud_hdr {
 struct zbud_page {
 	struct list_head bud_list;
 	spinlock_t lock;
-	struct zbud_hdr owner;
+	struct zbud_hdr owner;	
 	DECL_SENTINEL
 	/* followed by NUM_CHUNK aligned CHUNK_SIZE-byte chunks */
 };
@@ -133,7 +133,7 @@ static int mycache_do_preload(struct tmem_pool *pool)
 	preempt_disable();
 	kp = &get_cpu_var(mycache_preloads);
 	while (kp->nr < ARRAY_SIZE(kp->objnodes)) {
-		preempt_enable_notrace();
+		preempt_enable();
 		objnode = kmem_cache_alloc(mycache_objnode_cache,
 				MYCACHE_GFP_MASK);
 		if (unlikely(objnode == NULL)) {
@@ -147,7 +147,7 @@ static int mycache_do_preload(struct tmem_pool *pool)
 		else
 			kmem_cache_free(mycache_objnode_cache, objnode);
 	}
-	preempt_enable_notrace();
+	preempt_enable();
 	obj = kmem_cache_alloc(mycache_obj_cache, MYCACHE_GFP_MASK);
 	if (unlikely(obj == NULL)) {
 		mycache_failed_alloc++;
@@ -231,7 +231,7 @@ static int create_new_pool(uint32_t flags){ //1 for persistent, 2 for shared
 static int glayer_cc_init_fs(size_t pagesize){
 	int ret = -1;
 	//BUG_ON
-	BUG_ON(pagesize != PAGE_SIZE);
+	//BUG_ON(pagesize != PAGE_SIZE);
 	ret = create_new_pool(0);
 	return ret;
 }
@@ -247,7 +247,7 @@ static int glayer_cc_init_shared_fs(uuid_t *uuid, size_t pagesize){
 
 
 static int glayer_cc_get_page(int pool_id,struct cleancache_filekey key,pgoff_t index, struct page *page){
-	//printk(KERN_ALERT "glayer: get page\n");
+	printk(KERN_ALERT "glayer: get page\n");
 	return -1;
 }
 
@@ -257,17 +257,18 @@ static void glayer_cc_put_page(int pool_id,struct cleancache_filekey key,pgoff_t
 	struct tmem_pool *pool;
 	int ret = -1;
 	struct tmem_oid *oidp = (struct tmem_oid *)&key;
-	BUG_ON(!irqs_disabled());
+	//BUG_ON(!irqs_disabled());
 	pool = mycache_get_pool_by_id(pool_id);
 	if(likely(pool!=NULL)){
 		//mycache_freeze not used
 		if(mycache_do_preload(pool) == 0){
-			ret = tmem_put(pool, oidp, index, page);
+			ret = tmem_put(pool, oidp, index, (char *)(page),PAGE_SIZE, 0, is_ephemeral(pool));
 			printk(KERN_ALERT "glayer; put done: %d\n",ret);
-			preempt_enable_notrace();
+			mycache_put_pool(pool);
+			preempt_enable();
 		}
-		else
-			printk(KERN_ALERT "glayer; preload not working\n");
+		//else
+		//	printk(KERN_ALERT "glayer; preload not working\n");
 		
 	}
 }
@@ -289,8 +290,8 @@ static void glayer_cc_invalidate_inode(int pool_id, struct cleancache_filekey ke
 		
 		if (atomic_read(&pool->obj_count) > 0){
 			flobj_found++;
-			tmem_flush_object(pool, oidp);
-			printk(KERN_ALERT "glayer: flfound =%ld\n",flobj_found);
+			//tmem_flush_object(pool, oidp);
+			//printk(KERN_ALERT "glayer: flfound =%ld\n",flobj_found);
 		}
 		
 	}
@@ -348,9 +349,11 @@ static struct tmem_objnode *mycache_objnode_alloc(struct tmem_pool *pool)
 	struct mycache_preload *kp;
 
 	kp = &get_cpu_var(mycache_preloads);
+	
 	if (kp->nr <= 0)
 		goto out;
 	objnode = kp->objnodes[kp->nr - 1];
+	
 	BUG_ON(objnode == NULL);
 	kp->objnodes[kp->nr - 1] = NULL;
 	kp->nr--;
@@ -371,13 +374,18 @@ static void mycache_objnode_free(struct tmem_objnode *objnode,
 
 static struct tmem_obj *mycache_obj_alloc(struct tmem_pool *pool)
 {
+	printk(KERN_ALERT "glayer; in obj alloc:\n");
 	struct tmem_obj *obj = NULL;
 	unsigned long count;
 	struct mycache_preload *kp;
 
 	kp = &get_cpu_var(mycache_preloads);
 	obj = kp->obj;
-	BUG_ON(obj == NULL);
+	//BUG_ON(obj == NULL);
+	if(obj == NULL){
+		printk(KERN_ALERT "glayer;objnode==null in alloc:\n");
+		return NULL;
+	}
 	kp->obj = NULL;
 	count = atomic_inc_return(&mycache_curr_obj_count);
 	if (count > mycache_curr_obj_count_max)
@@ -436,6 +444,7 @@ static struct zbud_page *zbud_alloc_raw_page(void)
 		/* none on zbpg list, try to get a kernel page */
 		zbpg = mycache_get_free_page();
 	if (likely(zbpg != NULL)) {
+		INIT_LIST_HEAD(&zbpg->bud_list);
 		owner = &zbpg->owner;
 		spin_lock_init(&zbpg->lock);
 		if (recycled) {
@@ -459,9 +468,8 @@ static struct zbud_hdr *zbud_create(uint32_t pool_id, struct tmem_oid *oid,
 {
 	struct zbud_hdr *owner = NULL;
 	struct zbud_page *zbpg = NULL, *ztmp;
-	unsigned nchunks;
 	char *to;
-	int i, found_good_buddy = 0;
+	int i;
 	zbpg = zbud_alloc_raw_page();
 	
 	if (unlikely(zbpg == NULL))
@@ -489,15 +497,23 @@ static struct zbud_hdr *zbud_create(uint32_t pool_id, struct tmem_oid *oid,
 out:
 	return owner;
 }
-static void *mycache_pampd_create(struct tmem_pool *pool, struct tmem_oid *oid,
-				 uint32_t index, struct page *page)
+static void *mycache_pampd_create(char *data, size_t size, bool raw, int eph,
+				struct tmem_pool *pool, struct tmem_oid *oid,
+				 uint32_t index)
 {
-	void *pampd = NULL, *cdata;
-	size_t clen;
+	void *pampd = NULL, *cdata,*temp;
+	unsigned clen;
 	int ret;
-	bool ephemeral = is_ephemeral(pool);
 	unsigned long count;
-	if(ephemeral){
+	struct page *page = (struct page *)(data);
+	//struct mycache_client *cli = pool->client;
+	//uint16_t client_id = get_client_id_from_client(cli);
+	unsigned long zv_mean_zsize;
+	unsigned long curr_pers_pampd_count;
+	u64 total_zsize;
+
+
+	if(eph){
 		cdata = kmap_atomic(page);
 		// scribble on addr
 
@@ -515,10 +531,113 @@ static void *mycache_pampd_create(struct tmem_pool *pool, struct tmem_oid *oid,
 	}
 	return pampd;
 }
+static void zbud_free_raw_page(struct zbud_page *zbpg)
+{
+	struct zbud_hdr *owner = &zbpg->owner;
+
+	ASSERT_SENTINEL(zbpg, ZBPG);
+	BUG_ON(!list_empty(&zbpg->bud_list));
+	ASSERT_SPINLOCK(&zbpg->lock);
+	BUG_ON(owner->size != 0 || tmem_oid_valid(&owner->oid));
+	INVERT_SENTINEL(zbpg, ZBPG);
+	spin_unlock(&zbpg->lock);
+	spin_lock(&zbpg_unused_list_spinlock);
+	list_add(&zbpg->bud_list, &zbpg_unused_list);
+	mycache_zbpg_unused_list_count++;
+	spin_unlock(&zbpg_unused_list_spinlock);
+}
+
+static unsigned zbud_free(struct zbud_hdr *zh)
+{
+	unsigned size;
+
+	ASSERT_SENTINEL(zh, ZBH);
+	BUG_ON(!tmem_oid_valid(&zh->oid));
+	size = zh->size;
+	zh->size = 0;
+	tmem_oid_set_invalid(&zh->oid);
+	INVERT_SENTINEL(zh, ZBH);
+	atomic_dec(&mycache_zbud_curr_zpages);
+	return size;
+}
+
+
+
+static void zbud_free_and_delist(struct zbud_hdr *zh)
+{
+	unsigned chunks;
+	struct zbud_hdr *zh_other;
+	unsigned budnum = 0, size;
+	struct zbud_page *zbpg =
+		container_of(zh, struct zbud_page, owner);
+
+	spin_lock(&zbud_budlists_spinlock);
+	spin_lock(&zbpg->lock);
+	if (list_empty(&zbpg->bud_list)) {
+		/* ignore zombie page... see zbud_evict_pages() */
+		spin_unlock(&zbpg->lock);
+		spin_unlock(&zbud_budlists_spinlock);
+		return;
+	}
+	size = zbud_free(zh);
+	ASSERT_SPINLOCK(&zbpg->lock);
+//	zh_other = &zbpg->buddy[(budnum == 0) ? 1 : 0];
+	zh_other=0;
+	if (zh_other->size == 0) { /* was unbuddied: unlist and free */
+		list_del_init(&zbpg->bud_list);
+		//zbud_unbuddied[chunks].count--;
+		spin_unlock(&zbud_budlists_spinlock);
+		zbud_free_raw_page(zbpg);
+	} else { /* was buddied: move remaining buddy to unbuddied list */
+		//chunks = zbud_size_to_chunks(zh_other->size) ;
+		//list_del_init(&zbpg->bud_list);
+		//list_add_tail(&zbpg->bud_list, &zbud_unbuddied[chunks].list);
+		//zbud_unbuddied[chunks].count++;
+		//spin_unlock(&zbud_budlists_spinlock);
+		//spin_unlock(&zbpg->lock);
+	}
+}
+
+static void mycache_pampd_free(void *pampd, struct tmem_pool *pool,
+				struct tmem_oid *oid, uint32_t index)
+{
+	//struct mycache_client *cli = pool->client;
+
+	if (is_ephemeral(pool)) {
+		zbud_free_and_delist((struct zbud_hdr *)pampd);
+		atomic_dec(&mycache_curr_eph_pampd_count);
+		BUG_ON(atomic_read(&mycache_curr_eph_pampd_count) < 0);
+	} else {
+		//zv_free(cli->zspool, pampd);
+		//atomic_dec(&mycache_curr_pers_pampd_count);
+		//BUG_ON(atomic_read(&mycache_curr_pers_pampd_count) < 0);
+	}
+}
+static void zcache_pampd_free_obj(struct tmem_pool *pool, struct tmem_obj *obj)
+{
+}
+
+static void zcache_pampd_new_obj(struct tmem_obj *obj)
+{
+}
+
+static int zcache_pampd_replace_in_obj(void *pampd, struct tmem_obj *obj)
+{
+	return -1;
+}
+
+static bool zcache_pampd_is_remote(void *pampd)
+{
+	return 0;
+}
 static struct tmem_pamops mycache_pamops = {
 	.create = mycache_pampd_create,
-	//.get_data = zcache_pampd_get_data,
-	//.free = zcache_pampd_free,
+	//.get_data = mycache_pampd_get_data,
+	.free = mycache_pampd_free,
+	.free_obj = zcache_pampd_free_obj,
+	.new_obj = zcache_pampd_new_obj,
+	.replace_in_obj = zcache_pampd_replace_in_obj,
+	.is_remote = zcache_pampd_is_remote,
 };
 
 static int mycache_init(void){
@@ -533,6 +652,7 @@ static int mycache_init(void){
 				sizeof(struct tmem_objnode), 0, 0, NULL);
 	mycache_obj_cache = kmem_cache_create("mycache_obj",
 				sizeof(struct tmem_obj), 0, 0, NULL);
+	//ret = mycache_new_client(LOCAL_CLIENT);
 out:
 	return ret;
 	
