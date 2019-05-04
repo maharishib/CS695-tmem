@@ -1,0 +1,1 @@
+cmd_/home/maharishi/glayer1/glayer.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000 -T ./scripts/module-common.lds  --build-id  -o /home/maharishi/glayer1/glayer.ko /home/maharishi/glayer1/glayer.o /home/maharishi/glayer1/glayer.mod.o ;  true
