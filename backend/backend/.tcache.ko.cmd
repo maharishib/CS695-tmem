@@ -1,0 +1,1 @@
+cmd_/home/maharishi/tcache/tcache.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000 -T ./scripts/module-common.lds  --build-id  -o /home/maharishi/tcache/tcache.ko /home/maharishi/tcache/tcache.o /home/maharishi/tcache/tcache.mod.o ;  true
